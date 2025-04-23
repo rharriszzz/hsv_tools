@@ -32,7 +32,9 @@ def main():
     img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
 
     # Create window and trackbars
-    cv2.namedWindow("Original + Mask", cv2.WINDOW_NORMAL)
+    # resizable window that preserves square pixels
+    cv2.namedWindow("Original + Mask",
+                    cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
     
     cv2.createTrackbar("ΔH", "Original + Mask", 10, 90, nothing)    # Hue tolerance (0–90)
     cv2.createTrackbar("ΔS", "Original + Mask", 50, 255, nothing)   # Sat tolerance (0–255)
@@ -44,6 +46,10 @@ def main():
     cv2.setMouseCallback("Original + Mask", on_mouse, (img_hsv, orig_w))
 
     while True:
+        # exit cleanly if user closed the window
+        if cv2.getWindowProperty("Original + Mask", cv2.WND_PROP_VISIBLE) < 1:
+            break
+
         # Read tolerances
         dH = cv2.getTrackbarPos("ΔH", "Original + Mask")
         dS = cv2.getTrackbarPos("ΔS", "Original + Mask")
