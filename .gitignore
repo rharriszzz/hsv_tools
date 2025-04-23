@@ -12,6 +12,7 @@ venv/
 
 # Don’t ignore this .gitignore itself
 !/.gitignore
+!/.gitattributes
 
 # allow the .vscode folder and its files
 !/.vscode/
