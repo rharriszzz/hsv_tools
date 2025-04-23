@@ -1,0 +1,26 @@
+# Byte‑compiled Python files
+*.pyc
+__pycache__/
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Ignore all “dot” files and directories
+.*
+
+# Don’t ignore this .gitignore itself
+!/.gitignore
+
+# allow the .vscode folder and its files
+!/.vscode/
+
+# (optionally) explicitly include the shared VS Code configs
+!/.vscode/launch.json
+!/.vscode/tasks.json
+!/.vscode/extensions.json
+
+# If you have other per‑user VS Code settings:
+.vscode/settings.json
+.vscode/*.code-workspace
