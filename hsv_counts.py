@@ -56,7 +56,22 @@ def main():
                    help="Saturation bucket width (≥1.0), default 8")
     p.add_argument("--val-bucket-size", type=float, default=64.0,
                    help="Value bucket width (≥1.0), default 64")
+    p.add_argument("--by_hue", action="store_true",
+                   help="Group and sort by hue buckets (default)")
+    p.add_argument("--by_bucket", action="store_true",
+                   help="Sort all buckets by count (no hue grouping)")
     args = p.parse_args()
+    # choose mode (default to by_hue)
+    default_by_hue = True
+    use_by_hue = args.by_hue
+    use_by_bucket = args.by_bucket
+    if use_by_hue and use_by_bucket:
+        print("Error: cannot specify both --by_hue and --by_bucket")
+        return
+    if not use_by_hue and not use_by_bucket:
+        use_by_hue = default_by_hue
+    # bar width override for bucket mode
+    bar_width = BAR_WIDTH if use_by_hue else 6
 
     # load image and convert to HSV
     img_bgr = cv2.imread(args.image)
@@ -95,35 +110,45 @@ def main():
 
     # build sequence of (H, S_bucket, V_bucket, count)
     seq = []
-    # sort hues by descending count, apply MIN_HUE_COUNT cutoff
-    valid_hues = np.where(hue_counts > MIN_HUE_COUNT)[0]
-    sorted_hues = valid_hues[np.argsort(-hue_counts[valid_hues])]
-    for hue in sorted_hues:
-        # flatten this hue's S/V bins
-        flat = counts3d[hue].ravel()
-        valid_idxs = np.where(flat > MIN_SV_COUNT)[0]
-        sorted_idxs = valid_idxs[np.argsort(-flat[valid_idxs])]
-        for idx in sorted_idxs:
-            sb = idx // v_bins
-            vb = idx % v_bins
-            cnt = counts3d[hue, sb, vb]
-            seq.append((hue, sb, vb, cnt))
+    if use_by_hue:
+        # group by hue then S/V
+        valid_hues = np.where(hue_counts > MIN_HUE_COUNT)[0]
+        sorted_hues = valid_hues[np.argsort(-hue_counts[valid_hues])]
+        for hue in sorted_hues:
+            flat = counts3d[hue].ravel()
+            valid_idxs = np.where(flat > MIN_SV_COUNT)[0]
+            sorted_idxs = valid_idxs[np.argsort(-flat[valid_idxs])]
+            for idx in sorted_idxs:
+                sb = idx // v_bins
+                vb = idx % v_bins
+                cnt = counts3d[hue, sb, vb]
+                seq.append((hue, sb, vb, cnt))
+    else:
+        # flatten all buckets and sort purely by count
+        for hue in range(h_bins):
+            for sb in range(s_bins):
+                for vb in range(v_bins):
+                    cnt = counts3d[hue, sb, vb]
+                    if cnt > MIN_SV_COUNT:
+                        seq.append((hue, sb, vb, cnt))
+        seq.sort(key=lambda x: x[3], reverse=True)
 
     # compute total pixels once
     total_pixels = img_bgr.shape[0] * img_bgr.shape[1]
 
-    # report buckets for the top 6 hues by total pixel count, 5 buckets each
-    valid_hues = np.where(hue_counts > MIN_HUE_COUNT)[0]
-    sorted_hues = valid_hues[np.argsort(-hue_counts[valid_hues])]
-    for hue in sorted_hues[:6]:
-        report_hue_buckets(seq, hue_counts, total_pixels,
-                          hue_bucket=hue, hbs=hbs, max_print=5)
+    if use_by_hue:
+        # report for top 6 hues (5 sub‑buckets each)
+        valid_hues = np.where(hue_counts > MIN_HUE_COUNT)[0]
+        sorted_hues = valid_hues[np.argsort(-hue_counts[valid_hues])]
+        for hue in sorted_hues[:6]:
+            report_hue_buckets(seq, hue_counts, total_pixels,
+                               hue_bucket=hue, hbs=hbs, max_print=5)
 
     # drop buckets with hue_fraction < 1e-3
     seq = [item for item in seq
            if (item[3] / hue_counts[item[0]]) >= 1e-3]
     # cap total buckets so plot width ≃ image width
-    max_bars = img_bgr.shape[1] // BAR_WIDTH
+    max_bars = img_bgr.shape[1] // bar_width
     if len(seq) > max_bars:
         seq = seq[:max_bars]
 
@@ -152,17 +177,17 @@ def main():
 
     # prepare pixel‐fraction data and horizontal positions
     fractions = [item[3] / total_pixels for item in seq]
-    x = np.arange(len(fractions)) * BAR_WIDTH
+    x = np.arange(len(fractions)) * bar_width
 
     # color bars by HSV→RGB but force very bright (near‐white) to black
     brightness = rgb_arr2d.sum(axis=1)
     # any bar whose RGB sum > 2.5 → nearly white → draw as black
     bar_colors = np.where(brightness[:, None] > 2.5, [0, 0, 0], rgb_arr2d)
-    ax_bar.bar(x, fractions, width=BAR_WIDTH, color=bar_colors, align='edge')
+    ax_bar.bar(x, fractions, width=bar_width, color=bar_colors, align='edge')
     ax_bar.set_yscale('log')
 
     ax_bar.margins(x=0)
-    ax_bar.set_xlim(0, len(fractions) * BAR_WIDTH)
+    ax_bar.set_xlim(0, len(fractions) * bar_width)
 
     # remove text labels—use a colored strip instead
     ax_bar.set_xticks([])
@@ -170,7 +195,7 @@ def main():
 
     # build a colored strip legend, each bucket repeated BAR_WIDTH cols
     strip_height = 20   # pixels tall for the HSV strip
-    strip = np.repeat(rgb_arr2d[None, :, :], BAR_WIDTH, axis=1)
+    strip = np.repeat(rgb_arr2d[None, :, :], bar_width, axis=1)
     strip = np.tile(strip, (strip_height, 1, 1))
 
     # inset a new axis below ax_bar for the color strip
@@ -178,7 +203,8 @@ def main():
     ax_strip.imshow(strip, aspect='auto')
     ax_strip.axis("off")
 
-    ax_bar.set_xlabel("(Hue, S_bucket, V_bucket)")
+    # remove horizontal axis text
+    # ax_bar.set_xlabel("(Hue, S_bucket, V_bucket)")
     ax_bar.set_ylabel("Pixel fraction")
     ax_bar.set_title("HSV bucket counts")
 
