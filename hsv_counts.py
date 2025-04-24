@@ -1,4 +1,4 @@
-```# filepath: c:\Users\rharr\git\hsv_tools\hsv_counts.py
+# filepath: c:\Users\rharr\git\hsv_tools\hsv_counts.py
 """
 hsv_counts.py
 
@@ -21,14 +21,41 @@ import matplotlib.pyplot as plt
 
 # Parameters
 SV_BUCKET_SIZE = 16    # bucket size for S and V (so bins = 256//16 = 16)
+BAR_WIDTH = 3          # width in pixels per HSV bucket in plot
 MIN_HUE_COUNT = 0      # ignore hues with total count ≤ this
 MIN_SV_COUNT = 0       # ignore (S_bucket, V_bucket) counts ≤ this
+
+def report_hue_buckets(seq, hue_counts, total_pixels, hue_bucket, hbs, max_print=10):
+    """
+    Prints the first max_print sub‐buckets for a given hue_bucket.
+    """
+    count = hue_counts[hue_bucket]
+    center = hue_bucket * hbs + hbs/2
+    print(f"Hue bucket={hue_bucket} (center≈{center:.1f}°) fraction: {count/total_pixels:.2e}")
+    title = f"First {max_print} S/V buckets for Hue bucket={hue_bucket}"
+    print(f"{title} (Hu_b, S_b, V_b, count, frac, hue_frac):")
+    printed = 0
+    for hb, sb, vb, cnt in seq:
+        if hb != hue_bucket:
+            continue
+        frac = cnt / total_pixels
+        hue_frac = cnt / hue_counts[hb]
+        print(f"Hb={hb}, Sb={sb}, Vb={vb}, count={cnt}, frac={frac:.2e}, hue_frac={hue_frac:.2e}")
+        printed += 1
+        if printed >= max_print:
+            break
 
 def main():
     p = argparse.ArgumentParser(
         description="Count pixels by H, S‐bucket, V‐bucket and plot results"
     )
     p.add_argument("image", help="Path to input image")
+    p.add_argument("--hue-bucket-size", type=float, default=4.0,
+                   help="Hue bucket width (≥1.0), default 3")
+    p.add_argument("--sat-bucket-size", type=float, default=8.0,
+                   help="Saturation bucket width (≥1.0), default 8")
+    p.add_argument("--val-bucket-size", type=float, default=64.0,
+                   help="Value bucket width (≥1.0), default 64")
     args = p.parse_args()
 
     # load image and convert to HSV
@@ -43,19 +70,28 @@ def main():
     s = img_hsv[:, :, 1].ravel()       # 0..255
     v = img_hsv[:, :, 2].ravel()       # 0..255
 
-    # total counts per hue
+    # bucket sizes from args (floats ≥1.0)
+    hbs = max(1.0, args.hue_bucket_size)
+    sbs = max(1.0, args.sat_bucket_size)
+    vbs = max(1.0, args.val_bucket_size)
+
+    # number of bins in each dimension
     max_hue = 180
-    hue_counts = np.bincount(h, minlength=max_hue)
+    h_bins = int(np.ceil(max_hue / hbs))
+    s_bins = int(np.ceil(256  / sbs))
+    v_bins = int(np.ceil(256  / vbs))
 
-    # bucket S and V
-    s_bins = 256 // SV_BUCKET_SIZE
-    v_bins = 256 // SV_BUCKET_SIZE
-    s_idx = np.minimum(s // SV_BUCKET_SIZE, s_bins - 1)
-    v_idx = np.minimum(v // SV_BUCKET_SIZE, v_bins - 1)
+    # bucket indices
+    h_idx = np.minimum((h / hbs).astype(int), h_bins - 1)
+    s_idx = np.minimum((s / sbs).astype(int), s_bins - 1)
+    v_idx = np.minimum((v / vbs).astype(int), v_bins - 1)
 
-    # 3D histogram: shape (H, S_bin, V_bin)
-    counts3d = np.zeros((max_hue, s_bins, v_bins), dtype=int)
-    np.add.at(counts3d, (h, s_idx, v_idx), 1)
+    # total counts per hue‐bucket
+    hue_counts = np.bincount(h_idx, minlength=h_bins)
+
+    # 3D histogram over bucketed H, S, V
+    counts3d = np.zeros((h_bins, s_bins, v_bins), dtype=int)
+    np.add.at(counts3d, (h_idx, s_idx, v_idx), 1)
 
     # build sequence of (H, S_bucket, V_bucket, count)
     seq = []
@@ -73,6 +109,24 @@ def main():
             cnt = counts3d[hue, sb, vb]
             seq.append((hue, sb, vb, cnt))
 
+    # compute total pixels once
+    total_pixels = img_bgr.shape[0] * img_bgr.shape[1]
+
+    # report buckets for the top 6 hues by total pixel count, 5 buckets each
+    valid_hues = np.where(hue_counts > MIN_HUE_COUNT)[0]
+    sorted_hues = valid_hues[np.argsort(-hue_counts[valid_hues])]
+    for hue in sorted_hues[:6]:
+        report_hue_buckets(seq, hue_counts, total_pixels,
+                          hue_bucket=hue, hbs=hbs, max_print=5)
+
+    # drop buckets with hue_fraction < 1e-3
+    seq = [item for item in seq
+           if (item[3] / hue_counts[item[0]]) >= 1e-3]
+    # cap total buckets so plot width ≃ image width
+    max_bars = img_bgr.shape[1] // BAR_WIDTH
+    if len(seq) > max_bars:
+        seq = seq[:max_bars]
+
     # --- plotting ---
     fig, (ax_img, ax_bar) = plt.subplots(
         1, 2, figsize=(12, 6), gridspec_kw={"width_ratios": [1, 2]}
@@ -82,15 +136,50 @@ def main():
     ax_img.imshow(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
     ax_img.axis("off")
 
-    # bar chart of counts
-    counts = [item[3] for item in seq]
-    labels = [f"H{item[0]} S{item[1]} V{item[2]}" for item in seq]
-    x = np.arange(len(seq))
-    ax_bar.bar(x, counts, align="center")
-    ax_bar.set_xticks(x)
-    ax_bar.set_xticklabels(labels, rotation=90, fontsize="small")
+    # build RGB lookup for each bucket before plotting
+    from matplotlib import colors
+    hsv_mid = []
+    # each h,sb,vb is the integer bucket index; use hbs,sbs,vbs to find the bucket center
+    for h, sb, vb, _ in seq:
+        h_mid = h * hbs + hbs / 2
+        s_mid = sb * sbs + sbs / 2
+        v_mid = vb * vbs + vbs / 2
+        # normalize: H/180, S/255, V/255 → all in [0,1]
+        hsv_mid.append([h_mid / 180.0, s_mid / 255.0, v_mid / 255.0])
+    hsv_arr = np.array(hsv_mid, dtype=float).reshape(1, -1, 3)
+    # rgb_arr2d shape = (N,3), values now guaranteed in 0–1
+    rgb_arr2d = colors.hsv_to_rgb(hsv_arr)[0]
+
+    # prepare pixel‐fraction data and horizontal positions
+    fractions = [item[3] / total_pixels for item in seq]
+    x = np.arange(len(fractions)) * BAR_WIDTH
+
+    # color bars by HSV→RGB but force very bright (near‐white) to black
+    brightness = rgb_arr2d.sum(axis=1)
+    # any bar whose RGB sum > 2.5 → nearly white → draw as black
+    bar_colors = np.where(brightness[:, None] > 2.5, [0, 0, 0], rgb_arr2d)
+    ax_bar.bar(x, fractions, width=BAR_WIDTH, color=bar_colors, align='edge')
+    ax_bar.set_yscale('log')
+
+    ax_bar.margins(x=0)
+    ax_bar.set_xlim(0, len(fractions) * BAR_WIDTH)
+
+    # remove text labels—use a colored strip instead
+    ax_bar.set_xticks([])
+    ax_bar.set_xticklabels([])
+
+    # build a colored strip legend, each bucket repeated BAR_WIDTH cols
+    strip_height = 20   # pixels tall for the HSV strip
+    strip = np.repeat(rgb_arr2d[None, :, :], BAR_WIDTH, axis=1)
+    strip = np.tile(strip, (strip_height, 1, 1))
+
+    # inset a new axis below ax_bar for the color strip
+    ax_strip = ax_bar.inset_axes([0, -0.18, 1, 0.15], transform=ax_bar.transAxes)
+    ax_strip.imshow(strip, aspect='auto')
+    ax_strip.axis("off")
+
     ax_bar.set_xlabel("(Hue, S_bucket, V_bucket)")
-    ax_bar.set_ylabel("Pixel count")
+    ax_bar.set_ylabel("Pixel fraction")
     ax_bar.set_title("HSV bucket counts")
 
     plt.tight_layout()
