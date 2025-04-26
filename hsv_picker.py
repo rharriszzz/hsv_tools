@@ -8,6 +8,7 @@ import os
 # --- Globals to hold state ---
 clicks = []              # store two clicks
 custom_mask = None       # mask built from line picker
+merge_mode = False       # if True, OR new region into existing mask
 zoom = 1.0
 offset_x = 0
 offset_y = 0
@@ -17,7 +18,7 @@ MAX_ZOOM = 8.0
 IMAGE_PATH = None        # will hold the input image path
 
 def on_mouse(event, x, y, flags, param):
-    global clicks, custom_mask, last_mouse
+    global clicks, custom_mask, last_mouse, merge_mode
     global zoom, offset_x, offset_y
     # param is (img_hsv, original_width, original_height)
     img_hsv, orig_w, orig_h = param
@@ -76,15 +77,28 @@ def on_mouse(event, x, y, flags, param):
 
             print(f"Total matched pixels: {total_count}")
 
-            custom_mask = np.where(total_match, 0, 255).astype(np.uint8)
+            # build new mask from this line
+            new_mask = np.where(total_match, 0, 255).astype(np.uint8)
+            if merge_mode and custom_mask is not None:
+                # merge into existing mask
+                old_sel = (custom_mask == 0)
+                new_sel = (new_mask == 0)
+                merged = old_sel | new_sel
+                custom_mask = np.where(merged, 0, 255).astype(np.uint8)
+            else:
+                # replace mask
+                custom_mask = new_mask
             clicks.clear()
+            # leave merge_mode enabled so further clicks also merge
+            # (reset only on explicit 'r' key)
+            # merge_mode = False
 
 def nothing(x):
     pass
 
 def run_loop(img_bgr, img_hsv, orig_w, orig_h):
     """Interactive display loop (zoom + mask)."""
-    global zoom, offset_x, offset_y, last_mouse, custom_mask
+    global zoom, offset_x, offset_y, last_mouse, custom_mask, merge_mode
     global IMAGE_PATH
     while True:
         # exit cleanly if user closed the window
@@ -93,6 +107,17 @@ def run_loop(img_bgr, img_hsv, orig_w, orig_h):
 
         # handle zoom keys
         key = cv2.waitKey(30) & 0xFF
+        # merge region into existing mask
+        if key == ord('m'):
+            merge_mode = True
+            clicks.clear()
+            print("Merge mode enabled: click two points to add line regions")
+            continue
+        # reset merge mode
+        elif key == ord('r'):
+            merge_mode = False
+            print("Merge mode disabled")
+            continue
         # save mask
         if key == ord('s'):
             # choose the mask to save (full resolution)
@@ -173,6 +198,8 @@ def main():
     print("  • -           : zoom out")
     print("  • q  or Esc   : quit")
     print("  • s           : save current mask to file")
+    print("  • m           : merge new line region into existing mask")
+    print("  • r           : reset merge mode")
     print("------------------------------\n")
 
     # Load image
