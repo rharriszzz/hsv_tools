@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import argparse
+import os
 
 # Usage: python hsv_picker.py ../beads/beads-photo-2.jpg
 
@@ -13,6 +14,7 @@ offset_y = 0
 last_mouse = (0, 0)
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
+IMAGE_PATH = None        # will hold the input image path
 
 def on_mouse(event, x, y, flags, param):
     global clicks, custom_mask, last_mouse
@@ -83,6 +85,7 @@ def nothing(x):
 def run_loop(img_bgr, img_hsv, orig_w, orig_h):
     """Interactive display loop (zoom + mask)."""
     global zoom, offset_x, offset_y, last_mouse, custom_mask
+    global IMAGE_PATH
     while True:
         # exit cleanly if user closed the window
         if cv2.getWindowProperty("Original + Mask", cv2.WND_PROP_VISIBLE) < 1:
@@ -90,18 +93,37 @@ def run_loop(img_bgr, img_hsv, orig_w, orig_h):
 
         # handle zoom keys
         key = cv2.waitKey(30) & 0xFF
+        # save mask
+        if key == ord('s'):
+            # choose the mask to save (full resolution)
+            mask_to_save = custom_mask if custom_mask is not None else \
+                           np.full((orig_h, orig_w), 255, dtype=np.uint8)
+            # prompt for suffix
+            suffix = input("Enter filename suffix: ")
+            base = os.path.basename(IMAGE_PATH)
+            stem, ext = os.path.splitext(base)
+            out_name = f"{stem}-{suffix}{ext}"
+            cv2.imwrite(out_name, mask_to_save)
+            print(f"Mask saved to {out_name}")
+            continue
         if key in (ord('+'), ord('=')):
+            # zoom in around mouse
             mx, my = last_mouse
-            new_zoom = min(zoom * 2, MAX_ZOOM)
             cx = offset_x + mx / zoom
             cy = offset_y + my / zoom
-            zoom = new_zoom
+            zoom = min(zoom * 2, MAX_ZOOM)
+            vw, vh = orig_w/zoom, orig_h/zoom
+            offset_x = max(0, min(orig_w - vw, cx - vw/2))
+            offset_y = max(0, min(orig_h - vh, cy - vh/2))
         elif key == ord('-'):
+            # zoom out around mouse
             mx, my = last_mouse
-            new_zoom = max(zoom / 2, MIN_ZOOM)
             cx = offset_x + mx / zoom
             cy = offset_y + my / zoom
-            zoom = new_zoom
+            zoom = max(zoom / 2, MIN_ZOOM)
+            vw, vh = orig_w/zoom, orig_h/zoom
+            offset_x = max(0, min(orig_w - vw, cx - vw/2))
+            offset_y = max(0, min(orig_h - vh, cy - vh/2))
         elif key in (ord('q'), 27):
             break
 
@@ -139,6 +161,9 @@ def main():
     parser = argparse.ArgumentParser(description="HSV-based interactive picker")
     parser.add_argument("image", help="Path to input image")
     args = parser.parse_args()
+    # remember input path for saving masks
+    global IMAGE_PATH
+    IMAGE_PATH = args.image
 
     # ---- Interaction summary ----
     print("HSV Picker Controls:")
@@ -147,6 +172,7 @@ def main():
     print("  • + or =      : zoom in")
     print("  • -           : zoom out")
     print("  • q  or Esc   : quit")
+    print("  • s           : save current mask to file")
     print("------------------------------\n")
 
     # Load image
