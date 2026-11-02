@@ -1,0 +1,5 @@
+# Versions used for the reviewed rendering; application requirements remain flexible.
+opencv-python==5.0.0.93
+numpy==2.5.4
+matplotlib==3.11.2
+pillow==13.0.0

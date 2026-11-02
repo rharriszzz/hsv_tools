@@ -17,6 +17,56 @@ MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 IMAGE_PATH = None        # will hold the input image path
 
+def mask_from_line(img_hsv, p1, p2, tolerances, *, report=False):
+    """Return the picker mask (0 selected, 255 unselected).
+
+    OpenCV H is circular on 0..179; S and V are 0..255. Samples are
+    visited in raster order, grouped by the first matching representative,
+    then matched against the full image with inclusive tolerances.
+    """
+    orig_h, orig_w = img_hsv.shape[:2]
+    dH, dS, dV = tolerances
+    # rasterize line
+    line_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
+    cv2.line(line_mask, p1, p2, 1, 1)
+    # collect distinct HSV along that line, cast to int to avoid uint8 overflow
+    line_hsv = img_hsv[line_mask == 1].astype(int)
+
+    # instead of raw unique, bucket line pixels by tolerance
+    buckets = []
+    for (h0, s0, v0) in line_hsv.reshape(-1, 3):
+        placed = False
+        for i, (h1, s1, v1, cnt) in enumerate(buckets):
+            dh = min(abs(h0 - h1), 180 - abs(h0 - h1))
+            if dh <= dH and abs(s0 - s1) <= dS and abs(v0 - v1) <= dV:
+                # merge
+                buckets[i] = (h1, s1, v1, cnt+1)
+                placed = True
+                break
+        if not placed:
+            buckets.append((h0,s0,v0,1))
+
+    # now buckets holds (h,s,v,line_count) for each cluster
+    total_match = np.zeros((orig_h, orig_w), bool)
+    total_count = 0
+    for (h_val,s_val,v_val,line_cnt) in buckets:
+        # build mask with same tolerance
+        dh = np.abs(img_hsv[:,:,0].astype(int)-int(h_val))
+        dh = np.minimum(dh, 180-dh)
+        ds = np.abs(img_hsv[:,:,1].astype(int)-int(s_val))
+        dv = np.abs(img_hsv[:,:,2].astype(int)-int(v_val))
+        m = (dh<=dH)&(ds<=dS)&(dv<=dV)
+        cnt = int(m.sum())
+        if report:
+            print(f"H={h_val} S={s_val} V={v_val}  count={cnt}")
+        total_match |= m
+        total_count += cnt
+
+    if report:
+        print(f"Total matched pixels: {total_count}")
+
+    return np.where(total_match, 0, 255).astype(np.uint8)
+
 def on_mouse(event, x, y, flags, param):
     global clicks, custom_mask, last_mouse, merge_mode
     global zoom, offset_x, offset_y
@@ -35,50 +85,9 @@ def on_mouse(event, x, y, flags, param):
             print(f"First point at {clicks[0]}")
         else:
             p1, p2 = clicks
-            # rasterize line
-            line_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
-            cv2.line(line_mask, p1, p2, 1, 1)
-            # collect distinct HSV along that line, cast to int to avoid uint8 overflow
-            line_hsv = img_hsv[line_mask == 1].astype(int)
-
-            # get tolerances
-            dH = cv2.getTrackbarPos("ΔH", "Original + Mask")
-            dS = cv2.getTrackbarPos("ΔS", "Original + Mask")
-            dV = cv2.getTrackbarPos("ΔV", "Original + Mask")
-
-            # instead of raw unique, bucket line pixels by tolerance
-            buckets = []
-            for (h0, s0, v0) in line_hsv.reshape(-1, 3):
-                placed = False
-                for i, (h1, s1, v1, cnt) in enumerate(buckets):
-                    dh = min(abs(h0 - h1), 180 - abs(h0 - h1))
-                    if dh <= dH and abs(s0 - s1) <= dS and abs(v0 - v1) <= dV:
-                        # merge
-                        buckets[i] = (h1, s1, v1, cnt+1)
-                        placed = True
-                        break
-                if not placed:
-                    buckets.append((h0,s0,v0,1))
-
-            # now buckets holds (h,s,v,line_count) for each cluster
-            total_match = np.zeros((orig_h, orig_w), bool)
-            total_count = 0
-            for (h_val,s_val,v_val,line_cnt) in buckets:
-                # build mask with same tolerance
-                dh = np.abs(img_hsv[:,:,0].astype(int)-int(h_val))
-                dh = np.minimum(dh, 180-dh)
-                ds = np.abs(img_hsv[:,:,1].astype(int)-int(s_val))
-                dv = np.abs(img_hsv[:,:,2].astype(int)-int(v_val))
-                m = (dh<=dH)&(ds<=dS)&(dv<=dV)
-                cnt = int(m.sum())
-                print(f"H={h_val} S={s_val} V={v_val}  count={cnt}")
-                total_match |= m
-                total_count += cnt
-
-            print(f"Total matched pixels: {total_count}")
-
-            # build new mask from this line
-            new_mask = np.where(total_match, 0, 255).astype(np.uint8)
+            tolerances = tuple(cv2.getTrackbarPos(name, "Original + Mask")
+                               for name in ("ΔH", "ΔS", "ΔV"))
+            new_mask = mask_from_line(img_hsv, p1, p2, tolerances, report=True)
             if merge_mode and custom_mask is not None:
                 # merge into existing mask
                 old_sel = (custom_mask == 0)
