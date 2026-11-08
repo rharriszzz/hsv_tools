@@ -8,7 +8,7 @@ HSV Picker samples colors along a line and finds pixels with similar hue, satura
 
 ## Install and run
 
-Use Python 3 with a desktop display for the interactive picker.
+Use maintained Python 3.14 (or a newer compatible version) with a desktop display for the interactive picker.
 
 ```bash
 python3 -m venv .venv
